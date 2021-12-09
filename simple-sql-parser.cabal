@@ -29,7 +29,7 @@ source-repository head
 
 Flag parserexe
   Description: Build SimpleSqlParserTool exe
-  Default:     False
+  Default:     True
 
 Flag fixitytest
   Description: Build fixity test exe
@@ -96,7 +96,8 @@ executable SimpleSqlParserTool
   main-is:             SimpleSqlParserTool.lhs
   hs-source-dirs:      tools
   Build-Depends:       simple-sql-parser,
-                       pretty-show >= 1.6 && < 1.10
+                       pretty-show >= 1.6 && < 1.10,
+                       bytestring
   if flag(parserexe)
     buildable:         True
   else
