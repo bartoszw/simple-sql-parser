@@ -8,18 +8,28 @@ lex: lex sql same
 indent: parse then pretty print sql
 
 > {-# LANGUAGE TupleSections #-}
-> import System.Environment
-> import Control.Monad
-> import Data.Maybe
-> import System.Exit
-> import Data.List
-> import Text.Show.Pretty
+> {-# LANGUAGE OverloadedStrings #-}
+> import System.Environment ( getArgs )
+> import Control.Monad ( when, forM_ )
+> import Data.Maybe ( isJust )
+> import System.Exit ( exitFailure )
+> import Data.List ( intercalate )
+> import Text.Show.Pretty ( ppShow )
 > --import Control.Applicative
+> import qualified Data.ByteString.Lazy as BL
+> import qualified Data.ByteString.Lazy.Char8 as CL
 
-> import Language.SQL.SimpleSQL.Pretty
-> import Language.SQL.SimpleSQL.Parse
-> import Language.SQL.SimpleSQL.Lex
 
+> import Language.SQL.SimpleSQL.Pretty ( prettyStatements )
+> import Language.SQL.SimpleSQL.Parse   ( ParseError(peFormattedError), parseStatements )
+> import Language.SQL.SimpleSQL.Lex ( ansi2011, lexSQL )
+> import Language.SQL.SimpleSQL.Dialect ( sqlserver, relaxParsing )
+
+> import Text.Parsec ( parse, sepBy, manyTill, try, (<|>), eof)
+> import Text.Parsec.Char ( anyChar, noneOf, space, string, char)
+> import Text.Parsec.ByteString.Lazy  (Parser)
+
+  
 
 > main :: IO ()
 > main = do
@@ -38,7 +48,11 @@ indent: parse then pretty print sql
 >     [("help", helpCommand)
 >     ,("parse", parseCommand)
 >     ,("lex", lexCommand)
->     ,("indent", indentCommand)]
+>     ,("indent", indentCommand)
+>     ,("l", lexBOreport)
+>     ,("read", readCommand)
+>     ,("split", splitCommand)
+>     ]
 
 > showHelp :: Maybe String -> IO ()
 > showHelp msg = do
@@ -57,6 +71,7 @@ indent: parse then pretty print sql
 >     case as of
 >       ["-"] -> ("",) <$> getContents
 >       ("-c":as') -> return ("", unwords as')
+>       ("-x":filename:_) -> (filename,) . CL.unpack . CL.filter isChar <$> BL.readFile filename
 >       [filename] -> (filename,) <$> readFile filename
 >       _ -> showHelp (Just "arguments not recognised") >> error ""
 
@@ -67,7 +82,7 @@ indent: parse then pretty print sql
 >       (f,src) <- getInput args
 >       either (error . peFormattedError)
 >           (putStrLn . ppShow)
->           $ parseStatements ansi2011 f Nothing src
+>           $ parseStatements (relaxParsing sqlserver) f Nothing src
 >   )
 
 > lexCommand :: (String,[String] -> IO ())
@@ -77,7 +92,7 @@ indent: parse then pretty print sql
 >       (f,src) <- getInput args
 >       either (error . peFormattedError)
 >              (putStrLn . intercalate ",\n" . map show)
->              $ lexSQL ansi2011 f Nothing src
+>              $ lexSQL (relaxParsing sqlserver) f Nothing src
 >   )
 
 
@@ -87,7 +102,71 @@ indent: parse then pretty print sql
 >   ,\args -> do
 >       (f,src) <- getInput args
 >       either (error . peFormattedError)
->           (putStrLn . prettyStatements ansi2011)
->           $ parseStatements ansi2011 f Nothing src
+>           (putStrLn . prettyStatements sqlserver)
+>           $ parseStatements (relaxParsing sqlserver) f Nothing src
 
 >   )
+
+> readCommand :: (String,[String] -> IO ())
+> readCommand =
+>   ("just read and strip non readible chars)"
+>   ,\args -> case args of
+>               (f:_) -> BL.readFile f >>= return . (CL.filter isChar) >>= BL.putStr       
+>               _     -> showHelp (Just "arguments not recognised") >> error ""
+>   )
+
+> splitCommand :: (String,[String] -> IO ())
+> splitCommand =
+>   ("(split file by SELECTs)"
+>   ,\args -> do
+>       (f,src) <- getInput args
+>       case parse (splitLine <* eof) f (CL.pack src) of
+>            Left e -> print e
+>            Right r -> mapM_ putStrLn r
+>   )
+
+> --   ,\args -> case args of
+> --              (f:_) -> BL.readFile f >>= 
+>  --                      \c -> case parse splitLine f c of
+>  --                                 Left e -> print e
+>  --                                 Right r -> (mapM_ CL.putStrLn) r
+>  --             _     -> showHelp (Just "arguments not recognised") >> error ""
+
+> splitLine :: Parser [String]
+> splitLine = do _ <- manyTill anyChar (try (string "SELECT")) 
+> --               l <- manyTill fourCases eof
+>                l <- sepBy fourCases space
+>                return ("SELECT\n" : l)
+>              
+
+> fourCases :: Parser String
+> fourCases = (try (string "UNION" >> manyTill space (string "SELECT")) >> return "\nUNION\nSELECT")
+>           <|> (try (string "IN" >> manyTill space (char '(') >> manyTill space (string "SELECT")) >> return "IN (\nSELECT")
+>           <|> (try (string "SELECT") >> return "\n_coZaZbiegOkolicznosci_\nSELECT")
+>      --     <|> (pure <$> anyChar)
+>           <|> do x <- noneOf " \n" 
+>                  xs <- fourCases
+>                  return (x:xs)
+>           <|> return []  
+
+> example3 :: Parser String
+> example3 = (try (string "UNION" >> manyTill anyChar (string "SELECT")) >> return "\nUNION\nSELECT")
+>           <|> (try (string "IN" >> manyTill anyChar (char '(')) >> manyTill anyChar (try (string "SELECT")) >> return "IN (\nSELECT")
+>           <|> (try (string "SELECT") >> return "\n-||\nSELECT")
+>              <|> do x <- noneOf " \n" 
+>                     xs <- example3
+>                     return (x:xs)
+>              <|> return []            
+
+> lexBOreport :: (String,[String] -> IO ())
+> lexBOreport =
+>   ("lex BO report file/stdin/command line (use -x to strip non readible chars)"
+>   ,\args -> do
+>       (f,src) <- getInput args
+>       either (error . peFormattedError)
+>              (putStrLn . intercalate ",\n" . map show)
+>              $ lexSQL (relaxParsing sqlserver) f Nothing src
+>   )
+
+> isChar :: Char -> Bool           
+> isChar c = c >= toEnum 32 && c < toEnum 127 || c == toEnum 10

@@ -154,11 +154,13 @@ Try to do this when this code is ported to a modern pretty printing lib.
 >     scalarExpr d e0 <+> names f <+> scalarExpr d e1
 
 > scalarExpr dia (Case t ws els) =
->     sep $ [text "case" <+> me (scalarExpr dia) t]
+>     sep $ [text "case" <+> me (scalarExpr dia) t']
 >           ++ map w ws
 >           ++ maybeToList (fmap e els)
 >           ++ [text "end"]
 >   where
+>     t' | t == Just Empty = Nothing 
+>        | otherwise       = t
 >     w (t0,t1) =
 >       text "when" <+> nest 5 (commaSep $ map (scalarExpr dia) t0)
 >       <+> text "then" <+> nest 5 (scalarExpr dia t1)
@@ -258,6 +260,17 @@ Try to do this when this code is ported to a modern pretty printing lib.
 >     text "convert(" <> typeName t <> text "," <+> scalarExpr d e <> text ")"
 > scalarExpr d (Convert t e (Just i)) =
 >     text "convert(" <> typeName t <> text "," <+> scalarExpr d e <> text "," <+> text (show i) <> text ")"
+
+> scalarExpr d (BusinessObjectFunctionName n1 e (Just n2)) =
+>     text "@" <> text n1 <+> scalarExpr d e <> text "@" <> text n2
+> scalarExpr d (BusinessObjectFunctionName n1 e Nothing) =
+>     text "@" <> text n1 <+> scalarExpr d e 
+
+> scalarExpr _ Empty = text ""
+
+> scalarExpr d (NullExpr s e) = 
+>     text "NULL /* @" <> text s <+> scalarExpr d e <> text "*/"
+
 
 > unname :: Name -> String
 > unname (Name Nothing n) = n

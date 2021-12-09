@@ -10,6 +10,7 @@ Data types to represent different dialect options
 >     ,postgres
 >     ,oracle
 >     ,sqlserver
+>     ,relaxParsing
 >     ) where
 
 > import Data.Data
@@ -88,8 +89,12 @@ Data types to represent different dialect options
 >     ,diPostgresSymbols :: Bool
 >      -- | allow sql server style symbols
 >     ,diSqlServerSymbols :: Bool
->      -- | allow sql server style for CONVERT function in format CONVERT(data_type(length), expression, style)
+>      -- | allow sqlserver style for CONVERT function in format CONVERT(data_type(length), expression, style)
 >     ,diConvertFunction :: Bool
+>      -- | syntax errors get collected and don't stop parsing. Allows to parse code embeded within other data
+>     ,diRelaxedParsing :: Bool
+>      -- | allow sqlserver style for GETDATE () function and the like
+>     ,diNoArgsFunction :: Bool
 >     }
 >                deriving (Eq,Show,Read,Data,Typeable)
 
@@ -112,6 +117,8 @@ Data types to represent different dialect options
 >                    ,diPostgresSymbols = False
 >                    ,diSqlServerSymbols = False
 >                    ,diConvertFunction = False                     
+>                    ,diRelaxedParsing = False
+>                    ,diNoArgsFunction = False
 >                    }
 
 > -- | mysql dialect
@@ -138,11 +145,15 @@ Data types to represent different dialect options
 >                      ,diHashIdentifier = True
 >                      ,diOdbc = True
 >                      ,diSqlServerSymbols = True
->                      ,diConvertFunction = True}
+>                      ,diConvertFunction = True
+>                      ,diNoArgsFunction = True}
 
 > addLimit :: Dialect -> Dialect
 > addLimit d = d {diKeywords = "limit": diKeywords d
 >                ,diLimit = True}
+
+> relaxParsing :: Dialect -> Dialect
+> relaxParsing d = d {diRelaxedParsing = True}
 
 
 The keyword handling is quite strong - an alternative way to do it

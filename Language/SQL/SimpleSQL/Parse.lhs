@@ -191,7 +191,7 @@ fixing them in the syntax but leaving them till the semantic checking
 >                    ,option,between,sepBy,sepBy1
 >                    ,try,many,many1,(<|>),choice,eof
 >                    ,optionMaybe,optional,runParser
->                    ,chainl1, chainr1,(<?>))
+>                    ,chainl1, chainr1,(<?>), lookAhead)
 > import Text.Parsec.Perm (permute,(<$?>), (<|?>))
 > import Text.Parsec.Prim (getState, token)
 > import Text.Parsec.Pos (newPos)
@@ -523,6 +523,11 @@ See the stringToken lexer below for notes on string literal syntax.
 > stringLit :: Parser ScalarExpr
 > stringLit = (\(s,e,t) -> StringLit s e t) <$> stringTokExtend
 
+  strange case from sqlserver: case ... end as 'xxx'
+
+> stringName :: Parser Name 
+> stringName = (\(s,e,t) -> Name (Just (s,e)) t) <$> stringTok
+
 > numberLit :: Parser ScalarExpr
 > numberLit = NumLit <$> sqlNumberTok False
 
@@ -549,9 +554,11 @@ select x from t where x > :param
 > parameter :: Parser ScalarExpr
 > parameter = choice
 >     [Parameter <$ questionMark
+>     ,boExpression
 >     ,HostParameter
 >      <$> hostParamTok
->      <*> optionMaybe (keyword "indicator" *> hostParamTok)]
+>      <*> optionMaybe (keyword "indicator" *> hostParamTok)
+>     ]
 
 == positional arg
 
@@ -565,7 +572,9 @@ scalar expression parens, row ctor and scalar subquery
 > parensExpr :: Parser ScalarExpr
 > parensExpr = parens $ choice
 >     [SubQueryExpr SqSq <$> queryExpr
->     ,ctor <$> commaSep1 scalarExpr]
+>     ,ctor <$> commaSep1 scalarExpr
+>     ,guardDialect diNoArgsFunction *> lookAhead closeParen *> pure Empty 
+>     ]
 >   where
 >     ctor [a] = Parens a
 >     ctor as = SpecialOp [Name Nothing "rowctor"] as
@@ -606,6 +615,16 @@ convertSqlServer: SqlServer dialect CONVERT(data_type(length), expression, style
 >                    *> keyword_ "convert" *>
 >                    parens (Convert <$> typeName <*> (comma *> scalarExpr)
 >                       <*> optionMaybe (comma *> unsignedInteger))
+
+=== Business Object function buildExpressionParser
+
+> boExpression :: Parser ScalarExpr
+> boExpression = guardDialect diRelaxedParsing 
+>                *> choice [try (BusinessObjectFunctionName <$> boFunctionName <*> (parensExpr <?> "BO function aplication failed 1a") 
+>                                                                  <*> (Just <$> boFunctionName) <?> "BO function aplication failed 1b")
+>                          ,NullExpr <$> boFunctionName <*> parensExpr -- here a try might by necessary as otherwise 
+>                                                                      -- @ char will be consumed in case no parens follow the @
+>                          ]
 
 === exists, unique
 
@@ -920,9 +939,10 @@ a in (queryexpr)
 > inSuffix :: Parser (ScalarExpr -> ScalarExpr)
 > inSuffix =
 >     mkIn <$> inty
->          <*> parens (choice
->                      [InQueryExpr <$> queryExpr
->                      ,InList <$> commaSep1 scalarExpr])
+>          <*> choice [parens (choice
+>                               [InQueryExpr <$> queryExpr
+>                               ,InList <$> commaSep1 scalarExpr])
+>                     ,InList . pure <$> boExpression]
 >   where
 >     inty = choice [True <$ keyword_ "in"
 >                   ,False <$ keywords_ ["not","in"]]
@@ -1176,6 +1196,11 @@ documenting/fixing.
 
 > scalarExpr :: Parser ScalarExpr
 > scalarExpr = E.buildExpressionParser (opTable False) term
+> {-scalarExpr = guardDialect (not . diRelaxedParsing) *> E.buildExpressionParser (opTable False) term
+>           <|> guardDialect diRelaxedParsing *> (try (E.buildExpressionParser (opTable False) term)
+>                                                   <|> finishIfSyntaxError)
+>   where
+>     finishIfSyntaxError = syntaxError *> many1 anyToken *> return Empty-}
 
 > term :: Parser ScalarExpr
 > term = choice [simpleLiteral
@@ -1193,7 +1218,10 @@ documenting/fixing.
 >               ,intervalLit
 >               ,specialOpKs
 >               ,idenExpr
->               ,odbcExpr]
+>               ,odbcExpr
+>               ,boExpression
+>               ,guardDialect diRelaxedParsing *> optional syntaxError *> return Empty -- check if not redundant
+>               ]
 >        <?> "scalar expression"
 
 expose the b expression for window frame clause range between
@@ -1240,8 +1268,12 @@ and set operations (query expr).
 == select lists
 
 > selectItem :: Parser (ScalarExpr,Maybe Name)
-> selectItem = (,) <$> scalarExpr <*> optionMaybe als
+> selectItem = (,) <$> scalarExpr <*> optionMaybe (choice [guardDialect (not . diRelaxedParsing) *> als
+>                                                        ,guardDialect diRelaxedParsing *> sqlServerAls
+>                                                        ])
 >   where als = optional (keyword_ "as") *> name
+>         sqlServerAls = optional (keyword_ "as") *> (try stringName 
+>                                                   <|>  name)
 
 > selectList :: Parser [(ScalarExpr,Maybe Name)]
 > selectList = commaSep1 selectItem
@@ -1499,6 +1531,7 @@ TODO: change style
 >     ,grant
 >     ,revoke
 >     ,SelectStatement <$> queryExpr
+>     ,guardDialect diRelaxedParsing *> many1 anyToken *> return EmptyStatement 
 >     ]
 >
 > statement :: Parser Statement
@@ -2044,6 +2077,21 @@ It is only allowed when all the strings are quoted with ' atm.
 >       (Nothing, L.Identifier Nothing p) | map toLower p `notElem` blackList -> Just p
 >       (Just k, L.Identifier Nothing p) | k == map toLower p -> Just p
 >       _ -> Nothing)
+
+> anyToken :: Parser () 
+> anyToken = mytoken (\_ -> Just ())
+
+> boFunctionName :: Parser String
+> boFunctionName = mytoken (\tok ->
+>     case tok of
+>       L.PrefixedVariable c n | c == '@' -> Just n
+>       _ -> Nothing) 
+
+> syntaxError :: Parser String
+> syntaxError = mytoken (\tok ->
+>     case tok of
+>       L.SyntaxError e s -> Just $ e ++ " at " ++ s
+>       _ -> Nothing) 
 
 > mytoken :: (L.Token -> Maybe a) -> Parser a
 > mytoken test = token showToken posToken testToken

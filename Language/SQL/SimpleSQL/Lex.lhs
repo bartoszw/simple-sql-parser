@@ -18,6 +18,7 @@ directly without the separately testing lexing stage.
 
 > -- | Lexer for SQL.
 > {-# LANGUAGE TupleSections #-}
+> {-# LANGUAGE FlexibleContexts #-}
 > module Language.SQL.SimpleSQL.Lex
 >     (Token(..)
 >     ,lexSQL
@@ -37,7 +38,7 @@ directly without the separately testing lexing stage.
 >                    ,setSourceColumn,setSourceLine
 >                    ,sourceName, setSourceName
 >                    ,sourceLine, sourceColumn
->                    ,notFollowedBy)
+>                    ,notFollowedBy,(<?>))
 > import Language.SQL.SimpleSQL.Combinators
 > import Language.SQL.SimpleSQL.Errors
 > import Control.Applicative hiding ((<|>), many)
@@ -46,6 +47,7 @@ directly without the separately testing lexing stage.
 > import Prelude hiding (takeWhile)
 > import Text.Parsec.String (Parser)
 > import Data.Maybe
+> import Data.Functor ((<&>))
 
 
 > -- | Represents a lexed token
@@ -91,6 +93,9 @@ directly without the separately testing lexing stage.
 >     -- | A block comment, \/* stuff *\/, includes the comment delimiters
 >     | BlockComment String
 >
+>     -- | Syntax error caught for not stopping the lexer
+>     | SyntaxError String String
+>
 >       deriving (Eq,Show)
 
 
@@ -108,6 +113,7 @@ directly without the separately testing lexing stage.
 > prettyToken _ (Whitespace t) = t
 > prettyToken _ (LineComment l) = l
 > prettyToken _ (BlockComment c) = c
+> prettyToken _ (SyntaxError _ c) = c
 
 > prettyTokens :: Dialect -> [Token] -> String
 > prettyTokens d ts = concat $ map (prettyToken d) ts
@@ -149,16 +155,17 @@ symbols, so we try these before symbol. Numbers can start with a . so
 this is also tried before symbol (a .1 will be parsed as a number, but
 . otherwise will be parsed as a symbol).
 
->     (p,) <$> choice [sqlString d
->                     ,identifier d
->                     ,lineComment d
->                     ,blockComment d
->                     ,sqlNumber d
->                     ,positionalArg d
->                     ,dontParseEndBlockComment d
->                     ,prefixedVariable d
->                     ,symbol d
->                     ,sqlWhitespace d]
+>     (p,) <$> choice [sqlString d <?> "sqlString"
+>                     ,identifier d <?> "identifier"
+>                     ,lineComment d <?> "lineComment"
+>                     ,blockComment d <?> "blockComment"
+>                     ,sqlNumber d <?> "sqlNumber"
+>                     ,positionalArg d <?> "positionalArg"
+>                     ,dontParseEndBlockComment d <?> "dontParseEndBlockComment"
+>                     ,prefixedVariable d <?> "prefixedVariable"
+>                     ,symbol d <?> "symbol"
+>                     ,sqlWhitespace d <?> "sqlWhitespace"
+>                     ,notAllowedSymbol d <?> "notAllowedSymbol"] <?> "symbol not allowed"
 
 Parses identifiers:
 
@@ -171,25 +178,39 @@ u&"unicode quoted identifier"
 > identifier :: Dialect -> Parser Token
 > identifier d =
 >     choice
->     [quotedIden
->     ,unicodeQuotedIden
+>     [guard (not $ diRelaxedParsing d) >> quotedIden
+>     ,guard (diRelaxedParsing d) >> quotedIdenRelaxed
+>     ,guard (not $ diRelaxedParsing d) >> unicodeQuotedIden
+>     ,guard (diRelaxedParsing d) >> unicodeQuotedIdenRelaxed
 >     ,regularIden
 >     ,guard (diBackquotedIden d) >> mySqlQuotedIden
+>     ,guard (diSquareBracketQuotedIden d && diRelaxedParsing d) >> sqlServerQuotedIdenVoid
 >     ,guard (diSquareBracketQuotedIden d) >> sqlServerQuotedIden
 >     ]
 >   where
 >     regularIden = Identifier Nothing <$> identifierString
 >     quotedIden = Identifier (Just ("\"","\"")) <$> qidenPart
+>     quotedIdenRelaxed  = try quotedIden
+>                          <|> (try (char '"') *> manyTill anyChar eof <&> SyntaxError "mismatched \" quote")
 >     mySqlQuotedIden = Identifier (Just ("`","`"))
 >                       <$> (char '`' *> takeWhile1 (/='`') <* char '`')
->     sqlServerQuotedIden = Identifier (Just ("[","]"))
->                           <$> (char '[' *> takeWhile1 (`notElem` "[]") <* char ']')
+>     sqlServerQuotedIdenVoid = SyntaxError "unexpected []" <$> try (string "[]" *> manyTill anyChar eof)
+>     sqlServerQuotedIden = if not $ diRelaxedParsing d 
+>                           then Identifier (Just ("[","]"))
+>                                        <$> (char '[' *> takeWhile1 (`notElem` "[]") <* char ']')
+>                           else  try (Identifier (Just ("[","]"))
+>                                        <$> (char '[' *> takeWhile1 (`notElem` "[]") <* char ']'))
+>                                   -- Mismatched [] is treats input until first ] or eof
+>                               <|> SyntaxError "mismatched []" 
+>                                        <$> (char '[' *> takeWhile1 (`notElem` "]") <* (eof <|> void (char ']'))) 
 >     -- try is used here to avoid a conflict with identifiers
 >     -- and quoted strings which also start with a 'u'
 >     unicodeQuotedIden = Identifier
 >                         <$> (f <$> try (oneOf "uU" <* string "&"))
 >                         <*> qidenPart
 >       where f x = Just (x: "&\"", "\"")
+>     unicodeQuotedIdenRelaxed = try unicodeQuotedIden
+>                                <|> (try (string "u&" <|> string "U&") <&> SyntaxError "mismatched u& unicode identifier")
 >     qidenPart = char '"' *> qidenSuffix ""
 >     qidenSuffix t = do
 >         s <- takeTill (=='"')
@@ -217,11 +238,14 @@ use try because : and @ can be part of other things also
 > prefixedVariable :: Dialect -> Parser Token
 > prefixedVariable  d = try $ choice
 >     [PrefixedVariable <$> char ':' <*> identifierString
->     ,guard (diAtIdentifier d) >>
->      PrefixedVariable <$> char '@' <*> identifierString
->     ,guard (diHashIdentifier d) >>
->      PrefixedVariable <$> char '#' <*> identifierString
+>     ,guard (diAtIdentifier d && not (diRelaxedParsing d)) >> PrefixedVariable <$> char '@' <*> identifierString
+>     ,guard (diAtIdentifier d && diRelaxedParsing d) >> complexCheck '@'
+>     ,guard (diHashIdentifier d && not (diRelaxedParsing d)) >> PrefixedVariable <$> char '#' <*> identifierString
+>     ,guard (diHashIdentifier d && diRelaxedParsing d) >> complexCheck '#'
 >     ]
+>   where complexCheck ch = char ch >>
+>                          (try (PrefixedVariable ch <$> identifierString)
+>                          <|> (anyChar >>= \c -> return . SyntaxError (ch:" followed by " ++ [c]) $ (ch:[c])))
 
 > positionalArg :: Dialect -> Parser Token
 > positionalArg d =
@@ -240,7 +264,9 @@ x'hexidecimal string'
 
 
 > sqlString :: Dialect -> Parser Token
-> sqlString d = dollarString <|> csString <|> normalString
+> sqlString d = if not $ diRelaxedParsing d
+>               then dollarString <|> csString <|> normalString 
+>               else try (dollarString <|> csString <|> normalString) <|> quoteWithoutPair
 >   where
 >     dollarString = do
 >         guard $ diDollarString d
@@ -283,6 +309,7 @@ x'hexidecimal string'
 >     cs = choice $ (map (\x -> string ([x] ++ "'")) csPrefixes)
 >                   ++ [string "u&'"
 >                      ,string "U&'"]
+>     quoteWithoutPair = SyntaxError "Quote ' without pair" <$> ((:) <$> char '\'' <*> manyTill anyChar eof)
 
 numbers
 
@@ -300,16 +327,18 @@ considered part of the constant; it is an operator applied to the
 constant.
 
 > sqlNumber :: Dialect -> Parser Token
-> sqlNumber d =
->     SqlNumber <$> completeNumber
->     -- this is for definitely avoiding possibly ambiguous source
->     <* choice [-- special case to allow e.g. 1..2
->                guard (diPostgresSymbols d)
->                *> (void $ lookAhead $ try $ string "..")
->                   <|> void (notFollowedBy (oneOf "eE."))
->               ,notFollowedBy (oneOf "eE.")
->               ]
+> sqlNumber d = if not $ diRelaxedParsing d
+>               then SqlNumber <$> completeNumber <* finalizer 
+>               else try (SqlNumber <$> completeNumber <* finalizer)
+>                    <|> SyntaxError "incorrect number" . show <$> initNumber -- many1 digitPlus
 >   where
+>                         -- this is for definitely avoiding possibly ambiguous source
+>     finalizer = choice [-- special case to allow e.g. 1..2
+>                         guard (diPostgresSymbols d)
+>                         *> (void $ lookAhead $ try $ string "..")
+>                        <|> void (notFollowedBy (oneOf "eE."))
+>                        ,notFollowedBy (oneOf "eE.")
+>                        ]
 >     completeNumber =
 >       (int <??> (pp dot <??.> pp int)
 >       -- try is used in case we read a dot
@@ -327,9 +356,11 @@ constant.
 >           in if diPostgresSymbols d
 >              then try p
 >              else p
->     expon = (:) <$> oneOf "eE" <*> sInt
+>     expon = (:) <$> oneOf "eE" <*> sInt                 
 >     sInt = (++) <$> option "" (string "+" <|> string "-") <*> int
 >     pp = (<$$> (++))
+> --    digitPlus = satisfy (\x -> isDigit x || elem x "eE.+-" )
+>     initNumber = int <|> try( (++) <$> string "." <*> int)
 
 Symbols
 
@@ -340,18 +371,23 @@ The postgresql operator syntax allows a huge range of operators
 compared with ansi and other dialects
 
 > symbol :: Dialect -> Parser Token
-> symbol d  = Symbol <$> choice (concat
->    [dots
->    ,if diPostgresSymbols d
->     then postgresExtraSymbols
->     else []
->    ,miscSymbol
->    ,if diOdbc d then odbcSymbol else []
->    ,if diPostgresSymbols d
->     then generalizedPostgresqlOperator
->     else basicAnsiOps
->    ])
+> symbol d  = choice [guard (not $ diRelaxedParsing d) *> symbol' d
+>                    ,guard (diRelaxedParsing d) *> (try (symbol' d)
+>                                                <|> SyntaxError "not allowed |||" <$> pipesRelaxed)
+>                     ]
 >  where
+>    symbol' :: Dialect -> Parser Token     
+>    symbol' _  = Symbol <$> choice (concat
+>     [dots
+>     ,if diPostgresSymbols d
+>      then postgresExtraSymbols
+>      else []
+>     ,miscSymbol
+>     ,if diOdbc d then odbcSymbol else []
+>     ,if diPostgresSymbols d
+>      then generalizedPostgresqlOperator
+>      else basicAnsiOps
+>     ])
 >    dots = [many1 (char '.')]
 >    odbcSymbol = [string "{", string "}"]
 >    postgresExtraSymbols =
@@ -377,6 +413,9 @@ symbols can also be part of a single character symbol
 >            [char '|' *>
 >             choice ["||" <$ char '|' <* notFollowedBy (char '|')
 >                    ,return "|"]]
+>    -- catches not allowed ||| and consumes the rest of the input
+>    pipesRelaxed =  string "|||" <* manyTill anyChar eof
+
 
 postgresql generalized operators
 
@@ -492,6 +531,21 @@ isn't there.
 >               -- not an end comment or nested comment, continue
 >              ,(\c s -> x ++ [c] ++ s) <$> anyChar <*> commentSuffix n]
 
+Not allowed symbols or characters 
+
+> notAllowedSymbol :: Dialect -> Parser Token
+> notAllowedSymbol _ = SyntaxError "not allowed symbol" . 
+>                                  concat <$> many1 (choice [string "\""
+>                                                           ,string "!"
+>                                                           ,string "$"
+>                                                           ,string "`"
+>                                                           ,string "=" -- covers case where = is at the end of the line
+>                                                           ,string "\\"
+>                                                           ,string "." -- case where dot follows a sqlnumber 
+>                                                           ,string "]" -- in case there is no opening brace [ 
+>                                                           ,string "|"
+>                                                           ]
+>                                                     )
 
 This is to improve user experience: provide an error if we see */
 outside a comment. This could potentially break postgres ops with */
@@ -500,9 +554,11 @@ should write * / instead (I can't think of any cases when this would
 be valid syntax though).
 
 > dontParseEndBlockComment :: Dialect -> Parser Token
-> dontParseEndBlockComment _ =
+> dontParseEndBlockComment d =
 >     -- don't use try, then it should commit to the error
->     try (string "*/") *> fail "comment end without comment start"
+>     try (string "*/") *> if diRelaxedParsing d 
+>                          then return $ SyntaxError "comment end without comment start" "*/"
+>                          else fail "comment end without comment start"
 
 
 Some helper combinators

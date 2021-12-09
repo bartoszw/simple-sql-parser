@@ -167,7 +167,7 @@
 >       -- | cast(a as typename)
 >     | Cast ScalarExpr TypeName
 
->       -- | convert expression to given datatype @CONVERT(data_type(length), expression, style)@
+>       -- | convert expression to given datatype CONVERT(data_type(length), expression, style)
 >     | Convert TypeName ScalarExpr (Maybe Integer)
 
 >       -- | case expression. both flavours supported
@@ -216,6 +216,10 @@ in other places
 >       -- ^ an odbc literal e.g. {d '2000-01-01'}
 >     | OdbcFunc ScalarExpr
 >       -- ^ an odbc function call e.g. {fn CHARACTER_LENGTH('test')}
+>     | BusinessObjectFunctionName String ScalarExpr (Maybe String) 
+>       -- ^ used to pasre BO specific functions (perhaps needed some flag?)
+>     | Empty -- ^ to cover SqlServer function getdate ()
+>     | NullExpr String ScalarExpr -- ^ null expression followed by a comment. Used for on the fly conversion of BO variables to NULL
 >       deriving (Eq,Show,Read,Data,Typeable)
 
 > -- | Represents an identifier name, which can be quoted or unquoted.
