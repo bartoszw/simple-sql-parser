@@ -188,10 +188,10 @@ fixing them in the syntax but leaving them till the semantic checking
 > import Control.Applicative ((<**>))
 > import Data.Char (toLower, isDigit)
 > import Text.Parsec (setPosition,setSourceColumn,setSourceLine,getPosition
->                    ,option,between,sepBy,sepBy1
->                    ,try,many,many1,(<|>),choice,eof
->                    ,optionMaybe,optional,runParser
->                    ,chainl1, chainr1,(<?>), lookAhead)
+>                   ,option,between,sepBy,sepBy1
+>                   ,try,many,many1,(<|>),choice,eof
+>                   ,optionMaybe,optional,runParser
+>                   ,chainl1, chainr1,(<?>), lookAhead, sourceLine)
 > import Text.Parsec.Perm (permute,(<$?>), (<|?>))
 > import Text.Parsec.Prim (getState, token)
 > import Text.Parsec.Pos (newPos)
@@ -200,6 +200,7 @@ fixing them in the syntax but leaving them till the semantic checking
 > import Data.Function (on)
 > import Data.Maybe
 > import Text.Parsec.String (GenParser)
+> import Text.Printf (printf)
 
 > import Language.SQL.SimpleSQL.Syntax
 > import Language.SQL.SimpleSQL.Combinators
@@ -1268,12 +1269,21 @@ and set operations (query expr).
 == select lists
 
 > selectItem :: Parser (ScalarExpr,Maybe Name)
-> selectItem = (,) <$> scalarExpr <*> optionMaybe (choice [guardDialect (not . diRelaxedParsing) *> als
->                                                        ,guardDialect diRelaxedParsing *> sqlServerAls
->                                                        ])
+> --selectItem = (,) <$> scalarExpr <*> optionMaybe (choice [guardDialect (not . diRelaxedParsing) *> als
+> --                                                       ,guardDialect diRelaxedParsing *> sqlServerAls
+> selectItem = (,) <$> scalarExpr <*> choice [guardDialect (not . diRelaxedParsing) *> optionMaybe als
+>                                            ,guardDialect diRelaxedParsing *> mandatoryAs
+>                                                        ]
 >   where als = optional (keyword_ "as") *> name
 >         sqlServerAls = optional (keyword_ "as") *> (try stringName 
 >                                                   <|>  name)
+>         mandatoryAs = do
+>                       p <- getPosition 
+>                       existsAs <- optionMaybe sqlServerAls
+>                       case existsAs of
+>                         Just sth -> pure $ Just sth
+>                         Nothing  -> pure $ Just $ Name Nothing $ aliasName (sourceLine p)
+>         aliasName n = "COL" ++ printf "%05x" n
 
 > selectList :: Parser [(ScalarExpr,Maybe Name)]
 > selectList = commaSep1 selectItem

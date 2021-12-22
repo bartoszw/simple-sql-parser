@@ -97,7 +97,8 @@ executable SimpleSqlParserTool
   hs-source-dirs:      tools
   Build-Depends:       simple-sql-parser,
                        pretty-show >= 1.6 && < 1.10,
-                       bytestring
+                       bytestring,
+                       filepath 
   if flag(parserexe)
     buildable:         True
   else

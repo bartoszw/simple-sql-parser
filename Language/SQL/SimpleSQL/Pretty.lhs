@@ -21,6 +21,7 @@ Try to do this when this code is ported to a modern pretty printing lib.
 >                          brackets,hcat)
 > import Data.Maybe (maybeToList, catMaybes)
 > import Data.List (intercalate)
+> import Data.Char (toLower)
 
 
 > import Language.SQL.SimpleSQL.Syntax
@@ -66,7 +67,7 @@ Try to do this when this code is ported to a modern pretty printing lib.
 >     <+> quotes (text v)
 >     <+> intervalTypeField f
 >     <+> me (\x -> text "to" <+> intervalTypeField x) t
-> scalarExpr _ (Iden i) = names i
+> scalarExpr d (Iden i) = namesFiltered d i
 > scalarExpr _ Star = text "*"
 > scalarExpr _ Parameter = text "?"
 > scalarExpr _ (PositionalArg n) = text $ "$" ++ show n
@@ -74,10 +75,10 @@ Try to do this when this code is ported to a modern pretty printing lib.
 >     text p
 >     <+> me (\i' -> text "indicator" <+> text i') i
 
-> scalarExpr d (App f es) = names f <> parens (commaSep (map (scalarExpr d) es))
+> scalarExpr d (App f es) = namesFiltered d f <> parens (commaSep (map (scalarExpr d) es))
 
 > scalarExpr dia (AggregateApp f d es od fil) =
->     names f
+>     namesFiltered dia f
 >     <> parens ((case d of
 >                   Distinct -> text "distinct"
 >                   All -> text "all"
@@ -88,14 +89,14 @@ Try to do this when this code is ported to a modern pretty printing lib.
 >                   <+> parens (text "where" <+> scalarExpr dia x)) fil
 
 > scalarExpr d (AggregateAppGroup f es od) =
->     names f
+>     namesFiltered d f
 >     <> parens (commaSep (map (scalarExpr d) es))
 >     <+> if null od
 >         then empty
 >         else text "within group" <+> parens (orderBy d od)
 
 > scalarExpr d (WindowApp f es pb od fr) =
->     names f <> parens (commaSep $ map (scalarExpr d) es)
+>     namesFiltered d f <> parens (commaSep $ map (scalarExpr d) es)
 >     <+> text "over"
 >     <+> parens ((case pb of
 >                     [] -> empty
@@ -120,29 +121,29 @@ Try to do this when this code is ported to a modern pretty printing lib.
 > scalarExpr dia (SpecialOp nm [a,b,c]) | nm `elem` [[Name Nothing "between"]
 >                                                  ,[Name Nothing "not between"]] =
 >   sep [scalarExpr dia a
->       ,names nm <+> scalarExpr dia b
+>       ,namesFiltered dia nm <+> scalarExpr dia b
 >       ,nest (length (unnames nm) + 1) $ text "and" <+> scalarExpr dia c]
 
 > scalarExpr d (SpecialOp [Name Nothing "rowctor"] as) =
 >     parens $ commaSep $ map (scalarExpr d) as
 
 > scalarExpr d (SpecialOp nm es) =
->   names nm <+> parens (commaSep $ map (scalarExpr d) es)
+>   namesFiltered d nm <+> parens (commaSep $ map (scalarExpr d) es)
 
 > scalarExpr d (SpecialOpK nm fs as) =
->     names nm <> parens (sep $ catMaybes
+>     namesFiltered d nm <> parens (sep $ catMaybes
 >         (fmap (scalarExpr d) fs
 >          : map (\(n,e) -> Just (text n <+> scalarExpr d e)) as))
 
-> scalarExpr d (PrefixOp f e) = names f <+> scalarExpr d e
-> scalarExpr d (PostfixOp f e) = scalarExpr d e <+> names f
+> scalarExpr d (PrefixOp f e) = namesFiltered d f <+> scalarExpr d e
+> scalarExpr d (PostfixOp f e) = scalarExpr d e <+> namesFiltered d f
 > scalarExpr d e@(BinOp _ op _) | op `elem` [[Name Nothing "and"]
 >                                          ,[Name Nothing "or"]] =
 >     -- special case for and, or, get all the ands so we can vcat them
 >     -- nicely
 >     case ands e of
 >       (e':es) -> vcat (scalarExpr d e'
->                        : map ((names op <+>) . scalarExpr d) es)
+>                        : map ((namesFiltered d op <+>) . scalarExpr d) es)
 >       [] -> empty -- shouldn't be possible
 >   where
 >     ands (BinOp a op' b) | op == op' = ands a ++ ands b
@@ -151,7 +152,7 @@ Try to do this when this code is ported to a modern pretty printing lib.
 > scalarExpr d (BinOp e0 [Name Nothing "."] e1) =
 >     scalarExpr d e0 <> text "." <> scalarExpr d e1
 > scalarExpr d (BinOp e0 f e1) =
->     scalarExpr d e0 <+> names f <+> scalarExpr d e1
+>     scalarExpr d e0 <+> namesFiltered d f <+> scalarExpr d e1
 
 > scalarExpr dia (Case t ws els) =
 >     sep $ [text "case" <+> me (scalarExpr dia) t']
@@ -183,7 +184,7 @@ Try to do this when this code is ported to a modern pretty printing lib.
 
 > scalarExpr d (QuantifiedComparison v c cp sq) =
 >     scalarExpr d v
->     <+> names c
+>     <+> namesFiltered d c
 >     <+> (text $ case cp of
 >              CPAny -> "any"
 >              CPSome -> "some"
@@ -238,10 +239,10 @@ Try to do this when this code is ported to a modern pretty printing lib.
 >     scalarExpr d v <+> text "uescape" <+> text [e]-}
 
 > scalarExpr d (Collate v c) =
->     scalarExpr d v <+> text "collate" <+> names c
+>     scalarExpr d v <+> text "collate" <+> namesFiltered d c
 
-> scalarExpr _ (NextValueFor ns) =
->     text "next value for" <+> names ns
+> scalarExpr d (NextValueFor ns) =
+>     text "next value for" <+> namesFiltered d ns
 
 > scalarExpr d (VEComment cmt v) =
 >     vcat $ map comment cmt ++ [scalarExpr d v]
@@ -287,6 +288,14 @@ Try to do this when this code is ported to a modern pretty printing lib.
 
 > names :: [Name] -> Doc
 > names ns = hcat $ punctuate (text ".") $ map name ns
+
+> namesFiltered :: Dialect -> [Name] -> Doc
+> --namesFiltered d ns | diRelaxedParsing d = names $ filter (nameNotEq "EFLHurtF01") ns
+> namesFiltered d (n:ns) | diRelaxedParsing d && nameEq "dbo" n = names $ Name Nothing "EFLHurt01":n:ns
+>                        | otherwise          = names (n:ns)
+>   where --nameNotEq s1 (Name _ s2) = map toLower s1 /= map toLower s2
+>         nameEq s1 (Name _ s2) = map toLower s1 == map toLower s2
+> namesFiltered _ ns = names ns
 
 > typeName :: TypeName -> Doc
 > typeName (TypeName t) = names t
@@ -396,7 +405,7 @@ Try to do this when this code is ported to a modern pretty printing lib.
 > queryExpr d (Values vs) =
 >     text "values"
 >     <+> nest 7 (commaSep (map (parens . commaSep . map (scalarExpr d)) vs))
-> queryExpr _ (Table t) = text "table" <+> names t
+> queryExpr d (Table t) = text "table" <+> namesFiltered d t
 > queryExpr d (QEComment cmt v) =
 >     vcat $ map comment cmt ++ [queryExpr d v]
 
@@ -418,10 +427,10 @@ Try to do this when this code is ported to a modern pretty printing lib.
 >     sep [text "from"
 >         ,nest 5 $ vcat $ punctuate comma $ map tr ts]
 >   where
->     tr (TRSimple t) = names t
+>     tr (TRSimple t) = namesFiltered d t
 >     tr (TRLateral t) = text "lateral" <+> tr t
 >     tr (TRFunction f as) =
->         names f <> parens (commaSep $ map (scalarExpr d) as)
+>         namesFiltered d f <> parens (commaSep $ map (scalarExpr d) as)
 >     tr (TRAlias t a) = sep [tr t, alias a]
 >     tr (TRParens t) = parens $ tr t
 >     tr (TRQueryExpr q) = parens $ queryExpr d q
