@@ -272,6 +272,24 @@ Try to do this when this code is ported to a modern pretty printing lib.
 > scalarExpr d (NullExpr s e) = 
 >     text "NULL /* @" <> text s <+> scalarExpr d e <> text "*/"
 
+> scalarExpr _ (Unpivot n1 n2 cs al) = text "unpivot (" 
+>                                               <+> name n1 
+>                                               <+> text "for" 
+>                                               <+> name n2 
+>                                               <+> text "in" 
+>                                               <+> parens (commaSep $ map name cs)
+>                                               <+> text ") as"
+>                                               <+> name al
+
+> scalarExpr _ (Pivot n1 n2 n3 cs al) = text "pivot (" 
+>                                               <+> name n1 
+>                                               <+> parens (name n2)
+>                                               <+> text "for" 
+>                                               <+> name n3 
+>                                               <+> text "in" 
+>                                               <+> parens (commaSep $ map name cs)
+>                                               <+> text ") as"
+>                                               <+> name al
 
 > unname :: Name -> String
 > unname (Name Nothing n) = n
@@ -355,14 +373,17 @@ Try to do this when this code is ported to a modern pretty printing lib.
 = query expressions
 
 > queryExpr :: Dialect -> QueryExpr -> Doc
-> queryExpr dia (Select d sl fr wh gb hv od off fe) =
+> queryExpr dia (Select d sl fr unp pv wh gb hv od off fe st) =
 >   sep [text "select"
 >       ,case d of
 >           SQDefault -> empty
 >           All -> text "all"
 >           Distinct -> text "distinct"
 >       ,nest 7 $ sep [selectList dia sl]
+>       ,into  
 >       ,from dia fr
+>       ,pivot unp
+>       ,pivot pv
 >       ,maybeScalarExpr dia "where" wh
 >       ,grpBy dia gb
 >       ,maybeScalarExpr dia "having" hv
@@ -376,6 +397,12 @@ Try to do this when this code is ported to a modern pretty printing lib.
 >                 then text "limit" <+> scalarExpr dia e
 >                 else text "fetch first" <+> scalarExpr dia e
 >                      <+> text "rows only") fe
+>     into = case st of
+>               Just s -> statement dia s
+>               Nothing -> text "" 
+>     pivot p = case p of
+>               Just u -> scalarExpr dia u
+>               _ -> text "" 
 
 > queryExpr dia (QueryExprSetOp q1 ct d c q2) =
 >   sep [queryExpr dia q1
@@ -589,6 +616,9 @@ Try to do this when this code is ported to a modern pretty printing lib.
 >     <+> case s of
 >             DefaultInsertValues -> text "default" <+> text "values"
 >             InsertQuery q -> queryExpr d q
+
+> statement _ (Into t) =
+>     text "into" <+> names t
 
 > statement d (Update t a sts whr) =
 >     text "update" <+> names t

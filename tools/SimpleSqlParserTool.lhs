@@ -18,20 +18,21 @@ indent: parse then pretty print sql
 > --import Control.Applicative
 > import qualified Data.ByteString.Lazy as BL
 > import qualified Data.ByteString.Lazy.Char8 as CL
-> import qualified Data.ByteString.Internal as BL (c2w, w2c)
+> import qualified Data.ByteString.Internal as BL (w2c)
 
 
 > import Language.SQL.SimpleSQL.Pretty ( prettyStatements )
 > import Language.SQL.SimpleSQL.Parse   ( ParseError(peFormattedError), parseStatements )
-> import Language.SQL.SimpleSQL.Lex ( ansi2011, lexSQL )
+> import Language.SQL.SimpleSQL.Lex ( lexSQL )
 > import Language.SQL.SimpleSQL.Dialect ( sqlserver, relaxParsing )
 
-> import Text.Parsec ( Parsec, parse, sepBy, manyTill, try, (<|>), eof)
+> import Text.Parsec ( Parsec, parse, sepBy, manyTill, try, (<|>), eof, lookAhead )
 > import Text.Parsec.Char ( anyChar, noneOf, space, string, char)
 > --import Text.Parsec.ByteString.Lazy  (Parser)
 
 > import System.FilePath (takeBaseName, takeExtension)
-
+> import Data.Char (toUpper, toLower)
+  
 > type Parser = Parsec String () 
   
 > main :: IO ()
@@ -117,7 +118,9 @@ indent: parse then pretty print sql
 >   ("parse then pretty print SQL from file/stdin/command line (use -c to parse from command line)"
 >   ,\args -> do
 >       (f,src) <- getInput args
->       putStrLn $ viewHeader $ (takeBaseName f) ++ (tail $ takeExtension f)
+>       case takeExtension f of
+>           []        -> putStrLn $ viewHeader $ takeBaseName f
+>           _ -> putStrLn $ viewHeader $ takeBaseName f ++ tail (takeExtension f)
 >       either (error . peFormattedError)
 >           (putStrLn . prettyStatements (relaxParsing sqlserver))
 >           $ parseStatements (relaxParsing sqlserver) f Nothing src
@@ -152,21 +155,27 @@ indent: parse then pretty print sql
 >  --             _     -> showHelp (Just "arguments not recognised") >> error ""
 
 > splitLine :: Parser [String]
-> splitLine = do _ <- manyTill anyChar (try (string "SELECT")) 
+> splitLine = do _ <- manyTill anyChar (try (myString "SELECT")) 
 > --               l <- manyTill fourCases eof
 >                l <- sepBy fourCases space
 >                return ("SELECT\n" : l)
 >              
 
 > fourCases :: Parser String
-> fourCases = (try (string "UNION" >> manyTill space (string "SELECT")) >> return "\nUNION\nSELECT")
->           <|> (try (string "IN" >> manyTill space (char '(') >> manyTill space (string "SELECT")) >> return "IN (\nSELECT")
->           <|> (try (string "SELECT") >> return "\n_coZaZbiegOkolicznosci_\nSELECT")
->      --     <|> (pure <$> anyChar)
+> fourCases = (try (myString "UNION" >> manyTill space (myString "SELECT")) >> return "\nUNION\nSELECT")
+>           <|> (try (myString "IN" >> manyTill space (char '(') >> manyTill space (myString "SELECT")) >> return "IN (\nSELECT")
+>           <|> (try (myString "FROM" >> manyTill space (char '(') >> manyTill space (myString "SELECT")) >> return "FROM (\nSELECT")
+>           <|> (try (myString "EXISTS" >> manyTill space (char '(') >> manyTill space (myString "SELECT")) >> return "EXISTS (\nSELECT")
+>           <|> (try (string "," >> manyTill space (char '(') >> manyTill space (myString "SELECT")) >> return ", (\nSELECT")
+>           <|> (try (string "=" >> manyTill space (char '(') >> manyTill space (myString "SELECT")) >> return "= (\nSELECT")
+>           <|> (try (myString "SELECT" >> lookAhead space) >> return "\n_coZaZbiegOkolicznosci_\nSELECT")
+>           <|> (try (string "--") >>= \ds -> manyTill anyChar (lookAhead lineCommentEnd) >>= \s -> return (ds ++ s)) 
 >           <|> do x <- noneOf " \n" 
 >                  xs <- fourCases
 >                  return (x:xs)
 >           <|> return []  
+>   where lineCommentEnd :: Parser Char
+>         lineCommentEnd = char '\n' <|> (eof >> return  '\n')
 
 > {- example3 :: Parser String
 > example3 = (try (string "UNION" >> manyTill anyChar (string "SELECT")) >> return "\nUNION\nSELECT")
@@ -223,3 +232,11 @@ indent: parse then pretty print sql
 >               \SET QUOTED_IDENTIFIER ON\n\
 >               \GO\n\n\
 >               \CREATE VIEW dbo.MIS_SELECT_" ++ f ++ " AS\n"
+
+> -- Match the lowercase or uppercase form of 'c'
+> caseInsensitiveChar :: Char -> Parser Char
+> caseInsensitiveChar c = char (toLower c) <|> char (toUpper c)
+
+> -- Match the string 's', accepting either lowercase or uppercase form of each character 
+> myString :: String -> Parser String
+> myString s = try (mapM caseInsensitiveChar s)

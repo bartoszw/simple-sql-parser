@@ -91,6 +91,8 @@ Data types to represent different dialect options
 >     ,diSqlServerSymbols :: Bool
 >      -- | allow sqlserver style for CONVERT function in format CONVERT(data_type(length), expression, style)
 >     ,diConvertFunction :: Bool
+>      -- | allow c like syntax for predefined functions
+>     ,diCLikeFunctions :: Bool
 >      -- | syntax errors get collected and don't stop parsing. Allows to parse code embeded within other data
 >     ,diRelaxedParsing :: Bool
 >      -- | allow sqlserver style for GETDATE () function and the like
@@ -119,6 +121,7 @@ Data types to represent different dialect options
 >                    ,diConvertFunction = False                     
 >                    ,diRelaxedParsing = False
 >                    ,diNoArgsFunction = False
+>                    ,diCLikeFunctions = False
 >                    }
 
 > -- | mysql dialect
@@ -146,7 +149,8 @@ Data types to represent different dialect options
 >                      ,diOdbc = True
 >                      ,diSqlServerSymbols = True
 >                      ,diConvertFunction = True
->                      ,diNoArgsFunction = True}
+>                      ,diNoArgsFunction = True
+>                      ,diCLikeFunctions = True}
 
 > addLimit :: Dialect -> Dialect
 > addLimit d = d {diKeywords = "limit": diKeywords d

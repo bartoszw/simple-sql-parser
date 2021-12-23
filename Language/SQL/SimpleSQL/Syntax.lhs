@@ -218,6 +218,8 @@ in other places
 >       -- ^ an odbc function call e.g. {fn CHARACTER_LENGTH('test')}
 >     | BusinessObjectFunctionName String ScalarExpr (Maybe String) 
 >       -- ^ used to pasre BO specific functions (perhaps needed some flag?)
+>     | Unpivot Name Name [Name] Name
+>     | Pivot Name Name Name [Name] Name
 >     | Empty -- ^ to cover SqlServer function getdate ()
 >     | NullExpr String ScalarExpr -- ^ null expression followed by a comment. Used for on the fly conversion of BO variables to NULL
 >       deriving (Eq,Show,Read,Data,Typeable)
@@ -345,12 +347,16 @@ table expression = <from> [where] [groupby] [having] ...
 This would make some things a bit cleaner?
 
 >       ,qeFrom :: [TableRef]
+>       ,qeUnpivot :: Maybe ScalarExpr
+>       ,qePivot :: Maybe ScalarExpr
 >       ,qeWhere :: Maybe ScalarExpr
 >       ,qeGroupBy :: [GroupingExpr]
 >       ,qeHaving :: Maybe ScalarExpr
 >       ,qeOrderBy :: [SortSpec]
 >       ,qeOffset :: Maybe ScalarExpr
 >       ,qeFetchFirst :: Maybe ScalarExpr
+>        -- SELECT ... INTO ... FROM ...
+>       ,qeStatement :: Maybe Statement
 >       }
 >     | QueryExprSetOp
 >       {qe0 :: QueryExpr
@@ -390,12 +396,15 @@ I'm not sure if this is valid syntax or not.
 > makeSelect = Select {qeSetQuantifier = SQDefault
 >                     ,qeSelectList = []
 >                     ,qeFrom = []
+>                     ,qeUnpivot = Nothing
+>                     ,qePivot = Nothing
 >                     ,qeWhere = Nothing
 >                     ,qeGroupBy = []
 >                     ,qeHaving = Nothing
 >                     ,qeOrderBy = []
 >                     ,qeOffset = Nothing
->                     ,qeFetchFirst = Nothing}
+>                     ,qeFetchFirst = Nothing
+>                     ,qeStatement = Nothing}
 
 > -- | Represents the Distinct or All keywords, which can be used
 > -- before a select list, in an aggregate/window function
@@ -506,6 +515,7 @@ I'm not sure if this is valid syntax or not.
 >   | Delete [Name] (Maybe Name) (Maybe ScalarExpr)
 >   | Truncate [Name] IdentityRestart
 >   | Insert [Name] (Maybe [Name]) InsertSource
+>   | Into [Name] 
 >   --  | Merge
 >   | Update [Name] (Maybe Name) [SetClause] (Maybe ScalarExpr)
 >   {-  | TemporaryTable

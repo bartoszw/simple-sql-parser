@@ -617,6 +617,19 @@ convertSqlServer: SqlServer dialect CONVERT(data_type(length), expression, style
 >                    parens (Convert <$> typeName <*> (comma *> scalarExpr)
 >                       <*> optionMaybe (comma *> unsignedInteger))
 
+=== function in c like syntaxError
+
+functionAsApp: example: RIGHT (x,1)
+
+> functionAsApp :: Parser ScalarExpr
+> functionAsApp = guardDialect diCLikeFunctions
+>                 *> choice [ fn "right"
+>                           , fn "left"
+>                           , fn "rtrim"
+>                           , fn "ltrim"
+>                           , fn "upper"]
+>   where fn kw = keyword_ kw *> parens (App [Name Nothing kw] <$> commaSep1 scalarExpr)
+
 === Business Object function buildExpressionParser
 
 > boExpression :: Parser ScalarExpr
@@ -1212,6 +1225,7 @@ documenting/fixing.
 >               ,caseExpr
 >               ,cast
 >               ,convertSqlServer
+>               ,functionAsApp
 >               ,arrayCtor
 >               ,multisetCtor
 >               ,nextValueFor
@@ -1318,6 +1332,10 @@ aliases.
 >          choice [TRFunction n
 >                  <$> parens (commaSep scalarExpr)
 >                 ,pure $ TRSimple n]
+>          -- covers temp tables in form of #tablename
+>         ,guardDialect diHashIdentifier *> do 
+>                                           hS <- hostParamTok
+>                                           pure $ TRSimple [Name Nothing hS]
 >          -- todo: I think you can only have outer joins inside the oj,
 >          -- not sure.
 >         ,TROdbc <$> (symbol "{" *> keyword_ "oj" *> tref <* symbol "}")
@@ -1383,6 +1401,21 @@ pretty trivial.
 
 > having :: Parser ScalarExpr
 > having = keyword_ "having" *> scalarExpr
+
+> unpivot :: Parser ScalarExpr
+> unpivot = keyword_ "unpivot" 
+>           *> parens (Unpivot <$> name 
+>                              <*> (keyword_ "for" *> name <* keyword_ "in") 
+>                              <*> parens (commaSep1 name) 
+>                     ) <*> (keyword_ "as" *> name)
+
+> pivot :: Parser ScalarExpr
+> pivot = keyword_ "pivot" 
+>           *> parens (Pivot <$> name 
+>                            <*> parens name
+>                            <*> (keyword_ "for" *> name <* keyword_ "in") 
+>                            <*> parens (commaSep1 name) 
+>                     ) <*> (option () (keyword_ "as") *> name)
 
 > orderBy :: Parser [SortSpec]
 > orderBy = keywords_ ["order","by"] *> commaSep1 ob
@@ -1450,8 +1483,8 @@ and union, etc..
 >         <*> optionMaybe tableExpression
 >     mkSelect d sl Nothing =
 >         makeSelect{qeSetQuantifier = d, qeSelectList = sl}
->     mkSelect d sl (Just (TableExpression f w g h od ofs fe)) =
->         Select d sl f w g h od ofs fe
+>     mkSelect d sl (Just (TableExpression f unp pv w g h od ofs fe st)) =
+>         Select d sl f unp pv w g h od ofs fe st
 >     values = keyword_ "values"
 >              >> Values <$> commaSep (parens (commaSep scalarExpr))
 >     table = keyword_ "table" >> Table <$> names
@@ -1463,23 +1496,29 @@ be in the public syntax?
 > data TableExpression
 >     = TableExpression
 >       {_teFrom :: [TableRef]
+>       ,_teUnpivot :: Maybe ScalarExpr
+>       ,_tePivot :: Maybe ScalarExpr
 >       ,_teWhere :: Maybe ScalarExpr
 >       ,_teGroupBy :: [GroupingExpr]
 >       ,_teHaving :: Maybe ScalarExpr
 >       ,_teOrderBy :: [SortSpec]
 >       ,_teOffset :: Maybe ScalarExpr
->       ,_teFetchFirst :: Maybe ScalarExpr}
+>       ,_teFetchFirst :: Maybe ScalarExpr
+>       ,_teStatement :: Maybe Statement}
 
 > tableExpression :: Parser TableExpression
-> tableExpression = mkTe <$> from
+> tableExpression = mkTe <$> optionMaybe into
+>                        <*> from
+>                        <*> optionMaybe unpivot
+>                        <*> optionMaybe pivot
 >                        <*> optionMaybe whereClause
 >                        <*> option [] groupByClause
 >                        <*> optionMaybe having
 >                        <*> option [] orderBy
 >                        <*> offsetFetch
 >  where
->     mkTe f w g h od (ofs,fe) =
->         TableExpression f w g h od ofs fe
+>     mkTe st f unp pv w g h od (ofs,fe) =
+>         TableExpression f unp pv w g h od ofs fe st
 
 > setOp :: Parser (QueryExpr -> QueryExpr -> QueryExpr)
 > setOp = cq
@@ -1837,10 +1876,25 @@ slightly hacky parser for signed integers
 >     <*> (DefaultInsertValues <$ keywords_ ["default", "values"]
 >          <|> InsertQuery <$> queryExpr)
 
+> into :: Parser Statement
+> into = keyword_ "into" >>
+>     Into
+>     <$> (names
+>        <|> guardDialect diHashIdentifier *> do
+>                                             hs <- hostParamTok
+>                                             pure [Name Nothing hs])
+
+> --    <*> optionMaybe (parens $ commaSep1 name)
+> --    <*> (DefaultInsertValues <$ keywords_ ["default", "values"]
+> --         <|> InsertQuery <$> queryExpr)
+
 > update :: Parser Statement
 > update = keywords_ ["update"] >>
 >     Update
->     <$> names
+>     <$> (names
+>         <|> guardDialect diHashIdentifier *> do 
+>                                           hS <- hostParamTok
+>                                           pure [Name Nothing hS])
 >     <*> optionMaybe (optional (keyword_ "as") *> name)
 >     <*> (keyword_ "set" *> commaSep1 setClause)
 >     <*> optionMaybe (keyword_ "where" *> scalarExpr)
