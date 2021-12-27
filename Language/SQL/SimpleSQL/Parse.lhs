@@ -207,7 +207,7 @@ fixing them in the syntax but leaving them till the semantic checking
 > import Language.SQL.SimpleSQL.Errors
 > import Language.SQL.SimpleSQL.Dialect
 > import qualified Language.SQL.SimpleSQL.Lex as L
-
+  
 
 = Public API
 
@@ -1137,10 +1137,14 @@ messages, but both of these are too important.
 >              ,"is not similar to"]]
 >          ++ [multisetBinOp]
 
->         ,[binarySym "<" E.AssocNone
+>         ,[binarySymWeird '<' '=' E.AssocNone
+>          ,binarySymWeird '<' '>' E.AssocNone
+>          ,binarySym "<" E.AssocNone
+>          ,binarySymWeird '>' '=' E.AssocNone
 >          ,binarySym ">" E.AssocNone
 >          ,binarySym ">=" E.AssocNone
 >          ,binarySym "<=" E.AssocNone
+>          ,binarySymWeird '!' '=' E.AssocNone
 >          ,binarySym "!=" E.AssocRight
 >          ,binarySym "<>" E.AssocRight
 >          ,binarySym "=" E.AssocRight]
@@ -1167,6 +1171,8 @@ messages, but both of these are too important.
 >        ]
 >   where
 >     binarySym nm assoc = binary (symbol_ nm) nm assoc
+>     -- binarySymWeird covers A > = B and the like
+>     binarySymWeird m n assoc = binary (try $ singleCharSymbol m *> singleCharSymbol n *> pure ()) (m:[n]) assoc
 >     binaryKeyword nm assoc = binary (keyword_ nm) nm assoc
 >     binaryKeywords p =
 >         E.Infix (do
@@ -1283,11 +1289,15 @@ and set operations (query expr).
 == select lists
 
 > selectItem :: Parser (ScalarExpr,Maybe Name)
-> --selectItem = (,) <$> scalarExpr <*> optionMaybe (choice [guardDialect (not . diRelaxedParsing) *> als
-> --                                                       ,guardDialect diRelaxedParsing *> sqlServerAls
-> selectItem = (,) <$> scalarExpr <*> choice [guardDialect (not . diRelaxedParsing) *> optionMaybe als
->                                            ,guardDialect diRelaxedParsing *> mandatoryAs
->                                                        ]
+> --selectItem = (,) <$> scalarExpr <*> choice [guardDialect (not . diRelaxedParsing) *> optionMaybe als
+> --                                           ,guardDialect diRelaxedParsing *> mandatoryAs
+> selectItem = do sExp <- scalarExpr
+>                 case sExp of
+>                   -- If select item is like A = B, then there is no alias possible.
+>                   BinOp _ (Name Nothing "=":_) _ -> (,) <$> pure sExp <*> optionMaybe als
+>                   _                              -> (,) <$> pure sExp <*> choice [guardDialect (not . diRelaxedParsing) *> optionMaybe als
+>                                                                                  ,guardDialect diRelaxedParsing *> mandatoryAs
+>                                                                                  ]
 >   where als = optional (keyword_ "as") *> name
 >         sqlServerAls = optional (keyword_ "as") *> (try stringName 
 >                                                   <|>  name)
