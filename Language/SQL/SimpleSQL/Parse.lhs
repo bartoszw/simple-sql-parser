@@ -617,7 +617,7 @@ convertSqlServer: SqlServer dialect CONVERT(data_type(length), expression, style
 >                    parens (Convert <$> typeName <*> (comma *> scalarExpr)
 >                       <*> optionMaybe (comma *> unsignedInteger))
 
-=== function in c like syntaxError
+=== function in c like format
 
 functionAsApp: example: RIGHT (x,1)
 
@@ -1241,7 +1241,7 @@ documenting/fixing.
 >               ,idenExpr
 >               ,odbcExpr
 >               ,boExpression
->               ,guardDialect diRelaxedParsing *> optional syntaxError *> return Empty -- check if not redundant
+>               ,guardDialect diRelaxedParsing *> optional syntaxError *> return Empty -- possibly to add many1 anyToken to consume the rest of the input
 >               ]
 >        <?> "scalar expression"
 

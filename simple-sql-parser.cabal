@@ -34,6 +34,10 @@ Flag parserexe
 Flag fixitytest
   Description: Build fixity test exe
   Default:     False
+
+Flag findXLS
+  Description: Build FindXLSPaths exe
+  Default:     True
   
 
 common shared-properties
@@ -117,3 +121,15 @@ executable Fixity
   else
     buildable:         False
 
+executable FindXLSPaths
+  import:              shared-properties
+  main-is:             findXLSFilePaths.hs
+  hs-source-dirs:      tools
+  Build-Depends:       simple-sql-parser,
+                       pretty-show >= 1.6 && < 1.10,
+                       tasty >= 1.1 && < 1.5,
+                       tasty-hunit >= 0.9 && < 0.11
+  if flag(findXLS)
+    buildable:         True
+  else
+    buildable:         False
