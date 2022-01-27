@@ -93,7 +93,7 @@ directly without the separately testing lexing stage.
 >     -- | A block comment, \/* stuff *\/, includes the comment delimiters
 >     | BlockComment String
 >
->     -- | Syntax error caught for not stopping the lexer
+>     -- | Syntax error caught for not aborting the lexer
 >     | SyntaxError String String
 >
 >       deriving (Eq,Show)

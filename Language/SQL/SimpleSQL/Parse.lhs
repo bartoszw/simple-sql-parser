@@ -343,7 +343,10 @@ todo: replace (:[]) with a named function all over
 >   -- this will change when this is left factored
 >   where
 >     anotherName :: Parser ([Name] -> [Name])
->     anotherName = try ((:) <$> (symbol "." *> name))
+>     anotherName = try ((:) <$> (symbol "." *> name) )
+>                   -- double dots in sqlserver mean predefined DB environment.
+>                  <|>  guardDialect diSqlServerSymbols *> 
+>                       try ((++) <$> (symbol ".." *> name >>= \n -> pure (n : [Name Nothing []])))
 
 = Type Names
 
